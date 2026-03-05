@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Orifice — Project Explorer</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { background: #0c0c10; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+      canvas { display: block; }
+
+      #ui {
+        position: fixed; inset: 0; pointer-events: none; z-index: 10;
+        display: flex; flex-direction: column; justify-content: space-between;
+        padding: 26px 34px 28px;
+      }
+      .title { font-size: 11px; font-weight: 500; letter-spacing: 0.2em; text-transform: uppercase; color: rgba(255,255,255,0.28); }
+      .meta  { font-size: 10px; color: rgba(255,255,255,0.11); letter-spacing: 0.1em; margin-top: 5px; }
+      .hint  { text-align: center; font-size: 10px; color: rgba(255,255,255,0.1); letter-spacing: 0.12em; }
+
+      #tooltip {
+        position: fixed; pointer-events: none; z-index: 20;
+        background: rgba(8,8,14,0.9); border: 1px solid rgba(255,255,255,0.08);
+        padding: 10px 14px; border-radius: 9px;
+        font-size: 10px; color: rgba(255,255,255,0.45); letter-spacing: 0.06em; line-height: 1.9;
+        backdrop-filter: blur(18px); opacity: 0; transition: opacity 0.15s;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="ui">
+      <div>
+        <div class="title">Orifice &mdash; Project Explorer</div>
+        <div class="meta">3 folders &nbsp;&middot;&nbsp; 10 files</div>
+      </div>
+      <div class="hint">Scroll to zoom &nbsp;&middot;&nbsp; Drag to rotate model</div>
+    </div>
+    <div id="tooltip"></div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+        }
+      }
+    </script>
+
+    <script type="module">
+      import * as THREE from 'three';
+      import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+      // ── Card config ──────────────────────────────────────────────────────────
+      const CARD_W = 1.8, CARD_H = 2.25;
+      const CW = 480, CH = 600;
+
+      const CARDS = [
+        {
+          label: 'PNG Layers',
+          sub:   '7 files',
+          type:  'images',
+          accent: [232, 148, 90],
+          basePos: [-3.6, 0, 0],
+          files:  ['Layer 2.png','Layer 3.png','Layer 4.png','Layer 5.png','Layer 6.png','Layer 7.png','Layer 8.png'],
+        },
+        {
+          label: 'Project Files',
+          sub:   'orifice.ai  ·  orifice_.psd',
+          type:  'design',
+          accent: [126, 216, 164],
+          basePos: [3.6, 1.35, 0],
+          files:  ['orifice.ai', 'orifice_.psd'],
+        },
+        {
+          label: 'orifice_.png',
+          sub:   'root export',
+          type:  'single',
+          accent: [200, 130, 232],
+          basePos: [3.6, -1.35, 0],
+        },
+      ];
+
+      // ── Canvas helpers ───────────────────────────────────────────────────────
+      function rgba([r,g,b], a = 1) { return `rgba(${r},${g},${b},${a})`; }
+
+      function rr(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y);
+        ctx.quadraticCurveTo(x + w, y,     x + w, y + r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        ctx.lineTo(x + r, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
+      }
+
+      function loadImg(src) {
+        return new Promise(res => {
+          const img = new Image();
+          img.onload  = () => res(img);
+          img.onerror = () => res(null);
+          img.src = src;
+        });
+      }
+
+      function checker(ctx, x, y, w, h) {
+        const sq = 14;
+        for (let row = 0; row < Math.ceil(h / sq); row++)
+          for (let col = 0; col < Math.ceil(w / sq); col++) {
+            ctx.fillStyle = (row + col) % 2 === 0 ? '#1c1c26' : '#141420';
+            ctx.fillRect(x + col * sq, y + row * sq, sq, sq);
+          }
+      }
+
+      // ── Shared card base (bg, border, glow, header) ──────────────────────────
+      function drawBase(ctx, card) {
+        // Background
+        rr(ctx, 0, 0, CW, CH, 28);
+        const bg = ctx.createLinearGradient(0, 0, CW * 0.8, CH);
+        bg.addColorStop(0, 'rgba(22,22,32,0.98)');
+        bg.addColorStop(1, 'rgba(10,10,16,0.98)');
+        ctx.fillStyle = bg; ctx.fill();
+
+        // Corner glow
+        const glow = ctx.createRadialGradient(60, 0, 0, 60, 0, CW);
+        glow.addColorStop(0, rgba(card.accent, 0.13));
+        glow.addColorStop(1, 'transparent');
+        rr(ctx, 0, 0, CW, CH, 28);
+        ctx.fillStyle = glow; ctx.fill();
+
+        // Border
+        rr(ctx, 0.5, 0.5, CW - 1, CH - 1, 28);
+        ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.lineWidth = 1; ctx.stroke();
+
+        // Top accent bar
+        rr(ctx, 28, 0, CW - 56, 3, 2);
+        ctx.fillStyle = rgba(card.accent, 0.9); ctx.fill();
+
+        // Label + sublabel
+        ctx.fillStyle = rgba(card.accent, 1);
+        ctx.font = 'bold 11px -apple-system, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(card.label.toUpperCase(), 30, 46);
+
+        ctx.fillStyle = 'rgba(255,255,255,0.2)';
+        ctx.font = '10px -apple-system, sans-serif';
+        ctx.fillText(card.sub, 30, 64);
+
+        // Divider
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(28, 80); ctx.lineTo(CW - 28, 80); ctx.stroke();
+      }
+
+      // ── Card 1: PNG fan ──────────────────────────────────────────────────────
+      async function buildImages(ctx, card) {
+        drawBase(ctx, card);
+
+        const imgs = await Promise.all(
+          card.files.slice(0, 5).map(f => loadImg(`../baseOrifice_PNG/${encodeURIComponent(f)}`))
+        );
+
+        const tW = 295, tH = 196;
+        const cx = CW / 2, cy = CH / 2 + 32;
+        const angles  = [-9, -4.5, 0, 4.5, 9];
+        const offsets = [-16, -8, 0, 8, 16];
+
+        for (let i = imgs.length - 1; i >= 0; i--) {
+          const img = imgs[i];
+          if (!img) continue;
+          ctx.save();
+          ctx.translate(cx + offsets[i], cy);
+          ctx.rotate(angles[i] * Math.PI / 180);
+
+          // Shadow
+          ctx.shadowColor = 'rgba(0,0,0,0.7)'; ctx.shadowBlur = 22; ctx.shadowOffsetY = 10;
+          rr(ctx, -tW/2 - 5, -tH/2 - 5, tW + 10, tH + 10, 5);
+          ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fill();
+          ctx.shadowColor = 'transparent';
+          ctx.strokeStyle = 'rgba(255,255,255,0.09)'; ctx.lineWidth = 1; ctx.stroke();
+
+          // Image
+          rr(ctx, -tW/2, -tH/2, tW, tH, 3);
+          ctx.clip();
+          checker(ctx, -tW/2, -tH/2, tW, tH);
+          ctx.drawImage(img, -tW/2, -tH/2, tW, tH);
+          ctx.restore();
+        }
+
+        // Layer count
+        ctx.fillStyle = rgba(card.accent, 0.5);
+        ctx.font = '10px -apple-system, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${card.files.length} layers`, CW / 2, CH - 22);
+      }
+
+      // ── Card 2: Project files with orifice_.png preview ──────────────────────
+      async function buildDesign(ctx, card) {
+        drawBase(ctx, card);
+
+        const img = await loadImg('../orifice_.png');
+        const padX = 36, topY = 90, botY = 56;
+        const aW = CW - padX * 2, aH = CH - topY - botY;
+
+        if (img) {
+          const scale = Math.min(aW / img.width, aH / img.height);
+          const dw = img.width * scale, dh = img.height * scale;
+          const dx = (CW - dw) / 2, dy = topY + (aH - dh) / 2;
+
+          ctx.save();
+          ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = 22; ctx.shadowOffsetY = 8;
+          rr(ctx, dx - 4, dy - 4, dw + 8, dh + 8, 6);
+          ctx.fillStyle = 'rgba(255,255,255,0.04)'; ctx.fill();
+          ctx.shadowColor = 'transparent';
+
+          rr(ctx, dx, dy, dw, dh, 4);
+          ctx.clip();
+          checker(ctx, dx, dy, dw, dh);
+          ctx.drawImage(img, dx, dy, dw, dh);
+          ctx.restore();
+        }
+
+        // Format badges
+        ['.ai', '.psd'].forEach((b, i) => {
+          const bW = 52, bH = 22, bY = CH - 36;
+          const bX = CW / 2 - 56 + i * 62;
+          rr(ctx, bX, bY, bW, bH, 11);
+          ctx.fillStyle = rgba(card.accent, 0.16); ctx.fill();
+          ctx.fillStyle = rgba(card.accent, 0.9);
+          ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
+          ctx.fillText(b, bX + bW / 2, bY + 15);
+        });
+      }
+
+      // ── Card 3: orifice_.png full-bleed image card ───────────────────────────
+      async function buildSingle(ctx, card) {
+        // Full-bleed image with minimal chrome
+        const img = await loadImg('../orifice_.png');
+
+        // Background
+        rr(ctx, 0, 0, CW, CH, 28);
+        ctx.fillStyle = 'rgba(14,14,20,0.98)'; ctx.fill();
+
+        // Border
+        rr(ctx, 0.5, 0.5, CW - 1, CH - 1, 28);
+        ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.lineWidth = 1; ctx.stroke();
+
+        // Top accent bar
+        rr(ctx, 28, 0, CW - 56, 3, 2);
+        ctx.fillStyle = rgba(card.accent, 0.9); ctx.fill();
+
+        if (img) {
+          const pad = 24, topY = 22, botY = 48;
+          const aW = CW - pad * 2, aH = CH - topY - botY;
+          const scale = Math.min(aW / img.width, aH / img.height);
+          const dw = img.width * scale, dh = img.height * scale;
+          const dx = (CW - dw) / 2, dy = topY + (aH - dh) / 2;
+
+          ctx.save();
+          rr(ctx, dx, dy, dw, dh, 6);
+          ctx.clip();
+          checker(ctx, dx, dy, dw, dh);
+          ctx.drawImage(img, dx, dy, dw, dh);
+          ctx.restore();
+        }
+
+        // Filename label at bottom
+        ctx.fillStyle = rgba(card.accent, 0.75);
+        ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
+        ctx.fillText(card.label, CW / 2, CH - 20);
+      }
+
+      // ── Build texture dispatcher ─────────────────────────────────────────────
+      async function buildCard(card) {
+        const canvas = document.createElement('canvas');
+        canvas.width = CW; canvas.height = CH;
+        const ctx = canvas.getContext('2d');
+        if      (card.type === 'images') await buildImages(ctx, card);
+        else if (card.type === 'design') await buildDesign(ctx, card);
+        else                             await buildSingle(ctx, card);
+        return new THREE.CanvasTexture(canvas);
+      }
+
+      // ── Scene ────────────────────────────────────────────────────────────────
+      const scene = new THREE.Scene();
+      scene.fog   = new THREE.FogExp2(0x0c0c10, 0.08);
+
+      const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.001, 100);
+      camera.position.set(0, 0.5, 7.5);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      document.body.appendChild(renderer.domElement);
+
+      // Custom drag-to-rotate (model only, cards stay fixed)
+      let isDragging = false;
+      let prevMouse = { x: 0, y: 0 };
+      let targetRotY = 0, targetRotX = 0;
+
+      renderer.domElement.addEventListener('mousedown', e => {
+        isDragging = true;
+        prevMouse = { x: e.clientX, y: e.clientY };
+      });
+      window.addEventListener('mouseup', () => isDragging = false);
+      window.addEventListener('mousemove', e => {
+        if (!isDragging || !model) return;
+        const dx = e.clientX - prevMouse.x;
+        const dy = e.clientY - prevMouse.y;
+        targetRotY += dx * 0.008;
+        targetRotX += dy * 0.008;
+        targetRotX = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, targetRotX)); // clamp vertical
+        prevMouse = { x: e.clientX, y: e.clientY };
+      });
+
+      // Scroll to zoom
+      renderer.domElement.addEventListener('wheel', e => {
+        e.preventDefault();
+        camera.position.z += e.deltaY * 0.01;
+        camera.position.z = Math.max(3, Math.min(14, camera.position.z));
+      }, { passive: false });
+
+      // Lights
+      scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+      const sun = new THREE.DirectionalLight(0xffffff, 2.5);
+      sun.position.set(2, 4, 4); scene.add(sun);
+      const fill = new THREE.DirectionalLight(0x6688cc, 0.7);
+      fill.position.set(-3, 1, -2); scene.add(fill);
+
+      // Particles
+      const ptPos = new Float32Array(400 * 3);
+      for (let i = 0; i < 400; i++) {
+        ptPos[i*3]   = (Math.random()-0.5)*24;
+        ptPos[i*3+1] = (Math.random()-0.5)*16;
+        ptPos[i*3+2] = (Math.random()-0.5)*12;
+      }
+      const ptGeo = new THREE.BufferGeometry();
+      ptGeo.setAttribute('position', new THREE.BufferAttribute(ptPos, 3));
+      scene.add(new THREE.Points(ptGeo,
+        new THREE.PointsMaterial({ color: 0xffffff, size: 0.022, transparent: true, opacity: 0.16 })
+      ));
+
+      // GLTF model
+      let model = null;
+      new GLTFLoader().load('../3d_exports/GLTF/baseOrifice.gltf', gltf => {
+        model = gltf.scene;
+        const box    = new THREE.Box3().setFromObject(model);
+        const center = box.getCenter(new THREE.Vector3());
+        const size   = box.getSize(new THREE.Vector3());
+        model.position.sub(center);
+        model.scale.setScalar(1.8 / Math.max(size.x, size.y, size.z));
+        model.traverse(n => { if (n.isMesh) { n.castShadow = true; } });
+        scene.add(model);
+      }, null, e => console.warn('GLTF:', e));
+
+      // Cards — left and right, all facing +Z (toward default camera)
+      const cardGeo    = new THREE.PlaneGeometry(CARD_W, CARD_H);
+      const cardMeshes = [];
+
+      await Promise.all(CARDS.map(async (card, i) => {
+        const tex  = await buildCard(card);
+        const mat  = new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.FrontSide });
+        const mesh = new THREE.Mesh(cardGeo, mat);
+
+        // Glow halo (child plane, slightly behind)
+        const [r,g,b] = card.accent;
+        const glowMat  = new THREE.MeshBasicMaterial({
+          color: new THREE.Color(r/255, g/255, b/255),
+          transparent: true, opacity: 0, side: THREE.FrontSide,
+        });
+        mesh.add(new THREE.Mesh(new THREE.PlaneGeometry(CARD_W+0.2, CARD_H+0.2), glowMat));
+        mesh.children[0].position.z = -0.01;
+
+        mesh.position.set(...card.basePos);
+        mesh.userData = {
+          basePos: [...card.basePos],
+          floatPhase: Math.random() * Math.PI * 2,
+          glowMat,
+          card,
+        };
+        scene.add(mesh);
+        cardMeshes.push(mesh);
+      }));
+
+      // ── Interaction ──────────────────────────────────────────────────────────
+      const raycaster = new THREE.Raycaster();
+      const mouse     = new THREE.Vector2();
+      const tooltip   = document.getElementById('tooltip');
+      let   hovered   = null;
+
+      window.addEventListener('mousemove', e => {
+        mouse.x =  (e.clientX / innerWidth)  * 2 - 1;
+        mouse.y = -(e.clientY / innerHeight) * 2 + 1;
+        raycaster.setFromCamera(mouse, camera);
+        const hits = raycaster.intersectObjects(cardMeshes);
+        if (hits.length > 0) {
+          hovered = hits[0].object;
+          const c = hovered.userData.card;
+          tooltip.innerHTML = (c.files || [c.label]).join('<br>');
+          tooltip.style.left    = (e.clientX + 18) + 'px';
+          tooltip.style.top     = (e.clientY - 10) + 'px';
+          tooltip.style.opacity = '1';
+          document.body.style.cursor = 'pointer';
+        } else {
+          hovered = null;
+          tooltip.style.opacity = '0';
+          document.body.style.cursor = 'default';
+        }
+      });
+
+      window.addEventListener('resize', () => {
+        camera.aspect = innerWidth / innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(innerWidth, innerHeight);
+      });
+
+      // ── Animate ──────────────────────────────────────────────────────────────
+      const clock = new THREE.Clock();
+
+      (function animate() {
+        requestAnimationFrame(animate);
+        const t = clock.getElapsedTime();
+
+        // Smoothly rotate GLTF based on drag + idle drift
+        if (model) {
+          targetRotY += 0.002; // slow idle spin
+          model.rotation.y += (targetRotY - model.rotation.y) * 0.08;
+          model.rotation.x += (targetRotX - model.rotation.x) * 0.08;
+        }
+
+        // Float cards
+        cardMeshes.forEach(mesh => {
+          const { basePos, floatPhase, glowMat } = mesh.userData;
+          const isHovered = mesh === hovered;
+
+          // Gentle Y float
+          const floatY = Math.sin(t * 0.55 + floatPhase) * 0.07;
+          const tgtY   = basePos[1] + floatY + (isHovered ? 0.12 : 0);
+          mesh.position.y += (tgtY - mesh.position.y) * 0.06;
+
+          // Push toward camera on hover
+          const tgtZ = basePos[2] + (isHovered ? 0.35 : 0);
+          mesh.position.z += (tgtZ - mesh.position.z) * 0.08;
+
+          // Scale
+          const tgtS = isHovered ? 1.04 : 1;
+          mesh.scale.x += (tgtS - mesh.scale.x) * 0.08;
+          mesh.scale.y += (tgtS - mesh.scale.y) * 0.08;
+
+          // Glow
+          glowMat.opacity += ((isHovered ? 0.16 : 0) - glowMat.opacity) * 0.08;
+        });
+
+        renderer.render(scene, camera);
+      })();
+    </script>
+  </body>
+</html>

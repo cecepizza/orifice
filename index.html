@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Orifice Viewer</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: #1a1a1a;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+        }
+      }
+    </script>
+
+    <script type="module">
+      import * as THREE from 'three';
+      import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+      // Scene
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x1a1a1a);
+
+      // Camera
+      const camera = new THREE.PerspectiveCamera(
+        45,
+        window.innerWidth / window.innerHeight,
+        0.0001,
+        100
+      );
+      camera.position.set(0, 0.05, 0.1);
+
+      // Renderer
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      document.body.appendChild(renderer.domElement);
+
+      // Orbit controls
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+      controls.target.set(-0.019, 0.037, 0);
+      controls.update();
+
+      // Lights
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+      scene.add(ambientLight);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 2);
+      dirLight.position.set(0.1, 0.2, 0.1);
+      dirLight.castShadow = true;
+      scene.add(dirLight);
+
+      const fillLight = new THREE.DirectionalLight(0x8888ff, 0.5);
+      fillLight.position.set(-0.1, 0, -0.1);
+      scene.add(fillLight);
+
+      // Load GLTF
+      const loader = new GLTFLoader();
+      loader.load(
+        '../3d/GLTF/baseOrifice.gltf',
+        (gltf) => {
+          const model = gltf.scene;
+
+          // Center the model
+          const box = new THREE.Box3().setFromObject(model);
+          const center = box.getCenter(new THREE.Vector3());
+          model.position.sub(center);
+
+          // Fit camera to model
+          const size = box.getSize(new THREE.Vector3());
+          const maxDim = Math.max(size.x, size.y, size.z);
+          camera.position.set(0, 0, maxDim * 2.5);
+          camera.near = maxDim * 0.001;
+          camera.far = maxDim * 100;
+          camera.updateProjectionMatrix();
+
+          controls.target.set(0, 0, 0);
+          controls.minDistance = maxDim * 0.5;
+          controls.maxDistance = maxDim * 10;
+          controls.update();
+
+          model.traverse((node) => {
+            if (node.isMesh) {
+              node.castShadow = true;
+              node.receiveShadow = true;
+            }
+          });
+
+          scene.add(model);
+        },
+        (xhr) => {
+          console.log(`Loading: ${Math.round((xhr.loaded / xhr.total) * 100)}%`);
+        },
+        (error) => {
+          console.error('Error loading GLTF:', error);
+        }
+      );
+
+      // Resize handler
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      // Animation loop
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      }
+      animate();
+    </script>
+  </body>
+</html>
