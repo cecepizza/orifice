@@ -33,7 +33,7 @@
         <div class="title">Orifice &mdash; Project Explorer</div>
         <div class="meta">3 folders &nbsp;&middot;&nbsp; 10 files</div>
       </div>
-      <div class="hint">Scroll to zoom &nbsp;&middot;&nbsp; Drag to rotate model</div>
+      <div class="hint">Scroll to scale model &nbsp;&middot;&nbsp; Drag to rotate</div>
     </div>
     <div id="tooltip"></div>
 
@@ -284,7 +284,7 @@
 
       // ── Scene ────────────────────────────────────────────────────────────────
       const scene = new THREE.Scene();
-      scene.fog   = new THREE.FogExp2(0x0c0c10, 0.08);
+      scene.fog   = new THREE.FogExp2(0x0a0a14, 0.06);
 
       const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.001, 100);
       camera.position.set(0, 0.5, 7.5);
@@ -299,6 +299,7 @@
       let isDragging = false;
       let prevMouse = { x: 0, y: 0 };
       let targetRotY = 0, targetRotX = 0;
+      let modelZoom = 1, baseModelScale = 1;
 
       renderer.domElement.addEventListener('mousedown', e => {
         isDragging = true;
@@ -315,19 +316,32 @@
         prevMouse = { x: e.clientX, y: e.clientY };
       });
 
-      // Scroll to zoom
+      // Scroll to zoom (model only, cards stay same size)
       renderer.domElement.addEventListener('wheel', e => {
         e.preventDefault();
-        camera.position.z += e.deltaY * 0.01;
-        camera.position.z = Math.max(3, Math.min(14, camera.position.z));
+        modelZoom -= e.deltaY * 0.002;
+        modelZoom = Math.max(0.5, Math.min(2.5, modelZoom));
       }, { passive: false });
 
-      // Lights
-      scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-      const sun = new THREE.DirectionalLight(0xffffff, 2.5);
-      sun.position.set(2, 4, 4); scene.add(sun);
-      const fill = new THREE.DirectionalLight(0x6688cc, 0.7);
-      fill.position.set(-3, 1, -2); scene.add(fill);
+      // Lights — eerie but visible
+      scene.add(new THREE.AmbientLight(0x4444666, 0.8));
+      const sun = new THREE.DirectionalLight(0xaa88cc, 5.5);
+      sun.position.set(2, 4, 5); scene.add(sun);
+      const fill = new THREE.DirectionalLight(0x44ddff, 1.5);
+      fill.position.set(-4, 0, 2); scene.add(fill);
+      const rim = new THREE.DirectionalLight(0xff6688, 10.2);
+      rim.position.set(0, -2, -4); scene.add(rim);
+
+      // Spotlight on model
+      const spot = new THREE.SpotLight(0xffffff, 80);
+      spot.position.set(0, 6, 4);
+      spot.angle = Math.PI / 6;
+      spot.penumbra = 0.5;
+      spot.decay = 1.5;
+      spot.distance = 20;
+      spot.target.position.set(0, 0, 0);
+      scene.add(spot);
+      scene.add(spot.target);
 
       // Particles
       const ptPos = new Float32Array(400 * 3);
@@ -344,13 +358,14 @@
 
       // GLTF model
       let model = null;
-      new GLTFLoader().load('../3d_exports/GLTF/baseOrifice.gltf', gltf => {
+      new GLTFLoader().load('../3d_exports/orifice_tripioAI.glb', gltf => {
         model = gltf.scene;
         const box    = new THREE.Box3().setFromObject(model);
         const center = box.getCenter(new THREE.Vector3());
         const size   = box.getSize(new THREE.Vector3());
         model.position.sub(center);
-        model.scale.setScalar(1.8 / Math.max(size.x, size.y, size.z));
+        baseModelScale = 2.8 / Math.max(size.x, size.y, size.z);
+        model.scale.setScalar(baseModelScale);
         model.traverse(n => { if (n.isMesh) { n.castShadow = true; } });
         scene.add(model);
       }, null, e => console.warn('GLTF:', e));
@@ -423,11 +438,16 @@
         requestAnimationFrame(animate);
         const t = clock.getElapsedTime();
 
-        // Smoothly rotate GLTF based on drag + idle drift
+        // Smoothly rotate & zoom GLTF based on drag + scroll
         if (model) {
           targetRotY += 0.002; // slow idle spin
           model.rotation.y += (targetRotY - model.rotation.y) * 0.08;
           model.rotation.x += (targetRotX - model.rotation.x) * 0.08;
+          // Smooth zoom
+          const targetScale = baseModelScale * modelZoom;
+          model.scale.x += (targetScale - model.scale.x) * 0.1;
+          model.scale.y += (targetScale - model.scale.y) * 0.1;
+          model.scale.z += (targetScale - model.scale.z) * 0.1;
         }
 
         // Float cards
